@@ -1,0 +1,329 @@
+# workspace.py
+"""Google Workspace integration for the documentation generator.
+
+Auth is per-user OAuth (installed-app flow), so generated files land in the
+user's own Drive with normal ownership and sharing.
+
+Paths are resolved absolutely: the MCP server is launched with the *target*
+repository as its working directory, so anything relative would break.
+"""
+
+import json
+import os
+import re
+from pathlib import Path
+
+from google.auth.exceptions import RefreshError
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+
+SCOPES = [
+    'https://www.googleapis.com/auth/documents',
+    'https://www.googleapis.com/auth/presentations',
+    'https://www.googleapis.com/auth/drive',
+]
+
+_HERE = Path(__file__).resolve().parent
+
+CONFIG_DIR = Path(
+    os.environ.get('DOCGEN_CONFIG_DIR', Path.home() / '.config' / 'claude-doc-generator')
+)
+CREDENTIALS_PATH = Path(os.environ.get('DOCGEN_CREDENTIALS', CONFIG_DIR / 'credentials.json'))
+TOKEN_PATH = Path(os.environ.get('DOCGEN_TOKEN', CONFIG_DIR / 'token.json'))
+TEMPLATES_PATH = Path(os.environ.get('DOCGEN_TEMPLATES', CONFIG_DIR / 'templates.json'))
+
+# Brochure lives in Docs and predates this rewrite; keep the known-good default.
+DEFAULT_BROCHURE_TEMPLATE_ID = '1spO_SmbQDeJlWfI_jZztgfvA5KAGOpWGU5QnaeSPSlg'
+
+PLACEHOLDER_RE = re.compile(r'\{\{[A-Z_]+\}\}')
+
+# A slide that reaches a client showing "{{TAGLINE}}" is the one unrecoverable
+# failure mode of this tool, so every value passes through a fallback.
+FALLBACKS = {
+    '{{AGENT_NAME}}': 'Untitled Project',
+    '{{TAGLINE}}': '',
+    '{{TEAM_NAMES}}': 'Internal Team',
+    '{{DATE}}': '',
+    '{{STATUS}}': 'Prototype',
+    '{{INDUSTRY}}': 'General Technology',
+    '{{PROJECT_NAME}}': 'Untitled Project',
+    '{{USE_CASE}}': '',
+    '{{CAPABILITIES}}': '',
+}
+
+
+class DocGenError(Exception):
+    """Actionable configuration or API failure."""
+
+
+# --------------------------------------------------------------------------- auth
+
+
+def _find_client_secrets():
+    """Configured location first, then the repo copy, so the move is non-breaking."""
+    for candidate in (CREDENTIALS_PATH, _HERE / 'credentials.json'):
+        if candidate.exists():
+            return candidate
+    raise DocGenError(
+        f'No OAuth client secrets found. Expected {CREDENTIALS_PATH}.\n'
+        'Download the "OAuth client ID -> Desktop app" JSON from Google Cloud Console '
+        'and save it there.'
+    )
+
+
+def _save_token(creds):
+    TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TOKEN_PATH.write_text(creds.to_json())
+    TOKEN_PATH.chmod(0o600)
+
+
+def get_credentials(interactive=True):
+    """Return usable credentials, refreshing or running the OAuth flow as needed.
+
+    Pass interactive=False from the MCP server: it cannot usefully open a browser
+    mid-request, and run_local_server() would hang the tool call.
+    """
+    creds = None
+    if TOKEN_PATH.exists():
+        try:
+            creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
+        except ValueError as exc:
+            raise DocGenError(f'{TOKEN_PATH} is corrupt ({exc}). Delete it and re-authorize.')
+
+    if creds and creds.valid:
+        return creds
+
+    if creds and creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(Request())
+            _save_token(creds)
+            return creds
+        except RefreshError:
+            creds = None  # revoked or scope change; fall through to a fresh grant
+
+    if not interactive:
+        raise DocGenError(
+            'Not authorized with Google. Run this once in a terminal:\n'
+            f'  {_HERE / "venv" / "bin" / "python"} {_HERE / "auth.py"}'
+        )
+
+    flow = InstalledAppFlow.from_client_secrets_file(str(_find_client_secrets()), SCOPES)
+    creds = flow.run_local_server(port=0)
+    _save_token(creds)
+    return creds
+
+
+def _services(interactive=True):
+    creds = get_credentials(interactive=interactive)
+    return (
+        build('drive', 'v3', credentials=creds),
+        build('slides', 'v1', credentials=creds),
+        build('docs', 'v1', credentials=creds),
+    )
+
+
+# ---------------------------------------------------------------------- templates
+
+
+def load_templates():
+    if TEMPLATES_PATH.exists():
+        data = json.loads(TEMPLATES_PATH.read_text())
+    else:
+        data = {}
+    data.setdefault('brochure', DEFAULT_BROCHURE_TEMPLATE_ID)
+    if os.environ.get('DOCGEN_PRESENTATION_TEMPLATE_ID'):
+        data['presentation'] = os.environ['DOCGEN_PRESENTATION_TEMPLATE_ID']
+    if os.environ.get('DOCGEN_BROCHURE_TEMPLATE_ID'):
+        data['brochure'] = os.environ['DOCGEN_BROCHURE_TEMPLATE_ID']
+    return data
+
+
+def save_templates(data):
+    TEMPLATES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TEMPLATES_PATH.write_text(json.dumps(data, indent=2) + '\n')
+
+
+def _require_template(kind):
+    templates = load_templates()
+    template_id = templates.get(kind)
+    if not template_id:
+        raise DocGenError(
+            f'No {kind} template configured. Run setup_template.py to upload and '
+            f'register one (writes {TEMPLATES_PATH}).'
+        )
+    return template_id
+
+
+def presentation_text(presentation_id, slides_service=None):
+    """Every text string in a presentation, in slide order. Used to discover tags."""
+    if slides_service is None:
+        _, slides_service, _ = _services()
+    deck = slides_service.presentations().get(presentationId=presentation_id).execute()
+    out = []
+    for slide in deck.get('slides', []):
+        for element in slide.get('pageElements', []):
+            for para in element.get('shape', {}).get('text', {}).get('textElements', []):
+                run = para.get('textRun')
+                if run and run.get('content', '').strip():
+                    out.append(run['content'].strip())
+    return out
+
+
+def list_template_placeholders(kind='presentation'):
+    """The {{TAGS}} a template actually contains.
+
+    Call this before generating so the agent maps to the template that exists
+    rather than to a hardcoded list that has drifted.
+    """
+    template_id = _require_template(kind)
+    if kind == 'presentation':
+        _, slides_service, _ = _services()
+        haystack = ' '.join(presentation_text(template_id, slides_service))
+    else:
+        _, _, docs_service = _services()
+        doc = docs_service.documents().get(documentId=template_id).execute()
+        haystack = json.dumps(doc)
+    return sorted(set(PLACEHOLDER_RE.findall(haystack)))
+
+
+# ------------------------------------------------------------------- rendering
+
+
+def _sanitize(value, tag):
+    text = (value or '').strip()
+    if not text or text.startswith('{{'):
+        return FALLBACKS.get(tag, '')
+    return text
+
+
+def _replace_requests(values):
+    return [
+        {
+            'replaceAllText': {
+                'containsText': {'text': tag, 'matchCase': True},
+                'replaceText': _sanitize(value, tag),
+            }
+        }
+        for tag, value in values.items()
+    ]
+
+
+def _occurrences(response, tags):
+    """Map each tag to how many placeholders it actually replaced.
+
+    batchUpdate replies are positional and mirror the request order, so a tag
+    that matched nothing shows up as 0 rather than as an error.
+    """
+    replies = response.get('replies', [])
+    counts = {}
+    for tag, reply in zip(tags, replies):
+        counts[tag] = (reply or {}).get('replaceAllText', {}).get('occurrencesChanged', 0)
+    return counts
+
+
+def render_presentation(values, title=None, folder_id=None, interactive=True):
+    """Clone the master template, fill it in, and report what actually changed.
+
+    Returns {url, id, occurrences, orphans}. The caller decides how loudly to
+    complain about zero-occurrence tags.
+    """
+    template_id = _require_template('presentation')
+    drive_service, slides_service, _ = _services(interactive=interactive)
+
+    body = {'name': title or f"Presentation - {values.get('{{AGENT_NAME}}', 'Untitled')}"}
+    if folder_id or os.environ.get('DOCGEN_OUTPUT_FOLDER_ID'):
+        body['parents'] = [folder_id or os.environ['DOCGEN_OUTPUT_FOLDER_ID']]
+
+    copy = drive_service.files().copy(
+        fileId=template_id, body=body, supportsAllDrives=True
+    ).execute()
+    new_id = copy['id']
+
+    tags = list(values)
+    response = slides_service.presentations().batchUpdate(
+        presentationId=new_id, body={'requests': _replace_requests(values)}
+    ).execute()
+    occurrences = _occurrences(response, tags)
+
+    orphans = _sweep_orphans(new_id, slides_service)
+
+    return {
+        'url': f'https://docs.google.com/presentation/d/{new_id}/edit',
+        'id': new_id,
+        'occurrences': occurrences,
+        'orphans': orphans,
+    }
+
+
+def _sweep_orphans(presentation_id, slides_service):
+    """Blank any {{TAG}} the caller did not supply, so none can ship visibly."""
+    leftover = sorted(set(PLACEHOLDER_RE.findall(
+        ' '.join(presentation_text(presentation_id, slides_service))
+    )))
+    if leftover:
+        slides_service.presentations().batchUpdate(
+            presentationId=presentation_id,
+            body={'requests': [
+                {'replaceAllText': {
+                    'containsText': {'text': tag, 'matchCase': True},
+                    'replaceText': FALLBACKS.get(tag, ''),
+                }}
+                for tag in leftover
+            ]},
+        ).execute()
+    return leftover
+
+
+# ------------------------------------------------------------------ public API
+
+
+def generate_google_slides(agent_name, tagline, team_names, date, status, industry,
+                           interactive=True):
+    """Clone the master presentation template and replace the key variables."""
+    values = {
+        '{{AGENT_NAME}}': agent_name,
+        '{{TAGLINE}}': tagline,
+        '{{TEAM_NAMES}}': team_names,
+        '{{DATE}}': date,
+        '{{STATUS}}': status,
+        '{{INDUSTRY}}': industry,
+    }
+    result = render_presentation(values, interactive=interactive)
+
+    unmatched = [tag for tag, count in result['occurrences'].items() if count == 0]
+    if unmatched:
+        result['warning'] = (
+            'These tags are not present in the template, so their values were dropped: '
+            + ', '.join(unmatched)
+        )
+    return result
+
+
+def generate_google_doc(project_name, use_case, capabilities, interactive=True):
+    """Clone the brochure template in Google Docs and replace its variables."""
+    template_id = _require_template('brochure')
+    drive_service, _, docs_service = _services(interactive=interactive)
+
+    copy = drive_service.files().copy(
+        fileId=template_id, body={'name': f'Brochure - {project_name}'},
+        supportsAllDrives=True,
+    ).execute()
+    new_id = copy['id']
+
+    values = {
+        '{{PROJECT_NAME}}': project_name,
+        '{{USE_CASE}}': use_case,
+        '{{CAPABILITIES}}': capabilities,
+    }
+    tags = list(values)
+    response = docs_service.documents().batchUpdate(
+        documentId=new_id, body={'requests': _replace_requests(values)}
+    ).execute()
+
+    return {
+        'url': f'https://docs.google.com/document/d/{new_id}/edit',
+        'id': new_id,
+        'occurrences': _occurrences(response, tags),
+    }

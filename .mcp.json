@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "doc-generator": {
+      "command": "/Users/cesarhinojosa/Development/claude-doc-generator/venv/bin/python",
+      "args": ["/Users/cesarhinojosa/Development/claude-doc-generator/server.py"],
+      "env": {
+        "DOCGEN_CONFIG_DIR": "/Users/cesarhinojosa/.config/claude-doc-generator"
+      }
+    }
+  }
+}
