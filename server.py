@@ -28,7 +28,7 @@ def generate_slides(agent_name: str, tagline: str, team_names: str, date: str,
     except DocGenError as exc:
         return f'Configuration error: {exc}'
     except Exception as exc:
-        return f'Error while generating slides: {type(exc).__name__}: {exc}'
+        return f'Error while generating slides: {workspace.explain(exc)}'
 
     filled = ', '.join(f'{tag}={count}' for tag, count in result['occurrences'].items())
     lines = [f"Slides generated: {result['url']}", f'Replacements: {filled}']
@@ -47,7 +47,7 @@ def generate_brochure(project_name: str, use_case: str, capabilities: str) -> st
     except DocGenError as exc:
         return f'Configuration error: {exc}'
     except Exception as exc:
-        return f'Error generating brochure: {type(exc).__name__}: {exc}'
+        return f'Error generating brochure: {workspace.explain(exc)}'
     return f"Brochure generated: {result['url']}"
 
 
@@ -59,7 +59,7 @@ def list_template_placeholders(kind: str = 'presentation') -> str:
     except DocGenError as exc:
         return f'Configuration error: {exc}'
     except Exception as exc:
-        return f'Error reading template: {type(exc).__name__}: {exc}'
+        return f'Error reading template: {workspace.explain(exc)}'
     return ', '.join(tags) if tags else f'No {{{{TAGS}}}} found in the {kind} template.'
 
 

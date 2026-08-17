@@ -1,8 +1,12 @@
 # Secrets -- never commit
+.env
 credentials.json
 token.json
 templates.json
 *.pem
+
+# Internal planning -- not part of the shipped tool
+PROJECT_PLAN.md
 
 venv/
 __pycache__/

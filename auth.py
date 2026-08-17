@@ -14,8 +14,8 @@ from workspace import DocGenError
 def main():
     try:
         creds = workspace.get_credentials(interactive=True)
-    except DocGenError as exc:
-        print(f'Error: {exc}', file=sys.stderr)
+    except Exception as exc:
+        print(f'Error: {workspace.explain(exc)}', file=sys.stderr)
         return 1
 
     print(f'Authorized. Token saved to {workspace.TOKEN_PATH}')

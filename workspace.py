@@ -27,9 +27,36 @@ SCOPES = [
 
 _HERE = Path(__file__).resolve().parent
 
-CONFIG_DIR = Path(
-    os.environ.get('DOCGEN_CONFIG_DIR', Path.home() / '.config' / 'claude-doc-generator')
-)
+
+def _load_dotenv(path=None):
+    """Read KEY=VALUE lines from .env into the environment.
+
+    Real environment variables always win, so production can override the file
+    without editing it. Kept dependency-free on purpose.
+    """
+    env_file = Path(path or os.environ.get('DOCGEN_ENV_FILE', _HERE / '.env'))
+    if not env_file.exists():
+        return {}
+    loaded = {}
+    for raw in env_file.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, _, value = line.partition('=')
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+            loaded[key] = value
+    return loaded
+
+
+_load_dotenv()
+
+# Secrets live next to the code so they stay visible and easy to swap. This is
+# still safe from the cwd problem because _HERE is absolute; .gitignore keeps
+# credentials.json, token.json and templates.json out of version control.
+CONFIG_DIR = Path(os.environ.get('DOCGEN_CONFIG_DIR', _HERE))
 CREDENTIALS_PATH = Path(os.environ.get('DOCGEN_CREDENTIALS', CONFIG_DIR / 'credentials.json'))
 TOKEN_PATH = Path(os.environ.get('DOCGEN_TOKEN', CONFIG_DIR / 'token.json'))
 TEMPLATES_PATH = Path(os.environ.get('DOCGEN_TEMPLATES', CONFIG_DIR / 'templates.json'))
@@ -56,6 +83,54 @@ FALLBACKS = {
 
 class DocGenError(Exception):
     """Actionable configuration or API failure."""
+
+
+API_NAMES = {
+    'drive': 'Google Drive API',
+    'slides': 'Google Slides API',
+    'docs': 'Google Docs API',
+}
+
+
+def explain(exc):
+    """Turn a Google HttpError into something a human can act on.
+
+    The raw tracebacks bury the one useful sentence under a wall of URL-encoded
+    request detail, and the most common failure -- an API not enabled in the
+    project -- is entirely self-inflicted and one click to fix.
+    """
+    if isinstance(exc, DocGenError):
+        return str(exc)
+
+    content = getattr(exc, 'content', b'')
+    try:
+        detail = json.loads(content.decode())['error']
+    except Exception:
+        return f'{type(exc).__name__}: {exc}'
+
+    message = detail.get('message', '')
+    reasons = {d.get('reason') for d in detail.get('errors', [])}
+
+    if 'accessNotConfigured' in reasons:
+        match = re.search(r'project (\d+)', message)
+        project = match.group(1) if match else '<your-project>'
+        api = next((n for k, n in API_NAMES.items() if k in message.lower()), 'the API')
+        return (
+            f'{api} is not enabled in project {project}.\n\n'
+            f'  Enable it: https://console.cloud.google.com/apis/library/'
+            f'{api.split()[1].lower()}.googleapis.com?project={project}\n\n'
+            'Then wait ~2 minutes for it to propagate and retry. All three of Drive, '
+            'Slides and Docs must be enabled in the same project.'
+        )
+
+    if detail.get('code') == 404:
+        return (f'File not found, or your account cannot see it: {message}\n'
+                'Check the ID, and that the file is owned by or shared with you.')
+
+    if detail.get('code') == 403:
+        return f'Permission denied: {message}'
+
+    return f"{detail.get('status', detail.get('code', 'error'))}: {message}"
 
 
 # --------------------------------------------------------------------------- auth
@@ -127,6 +202,28 @@ def _services(interactive=True):
 # ---------------------------------------------------------------------- templates
 
 
+FILE_ID_RE = re.compile(r'/d/([a-zA-Z0-9_-]{15,})')
+
+
+def parse_file_id(value):
+    """Accept a bare file ID or any Google Docs/Slides/Drive URL.
+
+    Pasting the browser URL is the obvious thing to do, so every place that
+    takes an ID accepts one -- .env, templates.json and the CLI alike.
+    """
+    value = (value or '').strip()
+    match = FILE_ID_RE.search(value)
+    if match:
+        return match.group(1)
+    cleaned = value.strip('/')
+    if re.fullmatch(r'[a-zA-Z0-9_-]{15,}', cleaned):
+        return cleaned
+    raise DocGenError(
+        f'Could not read a file ID from {value!r}. Use either the ID or the full '
+        'URL, e.g. https://docs.google.com/presentation/d/<ID>/edit'
+    )
+
+
 def load_templates():
     if TEMPLATES_PATH.exists():
         data = json.loads(TEMPLATES_PATH.read_text())
@@ -137,7 +234,7 @@ def load_templates():
         data['presentation'] = os.environ['DOCGEN_PRESENTATION_TEMPLATE_ID']
     if os.environ.get('DOCGEN_BROCHURE_TEMPLATE_ID'):
         data['brochure'] = os.environ['DOCGEN_BROCHURE_TEMPLATE_ID']
-    return data
+    return {kind: parse_file_id(value) for kind, value in data.items() if value}
 
 
 def save_templates(data):

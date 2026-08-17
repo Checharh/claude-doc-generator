@@ -14,12 +14,12 @@ import workspace
 from workspace import DocGenError
 
 PAYLOAD = {
-    '{{AGENT_NAME}}': 'Doc Generator',
-    '{{TAGLINE}}': 'Turns any repository into a client-ready deck',
-    '{{TEAM_NAMES}}': 'Cesar Hinojosa',
+    '{{AGENT_NAME}}': 'Doc Generator for CodeRode',
+    '{{TAGLINE}}': 'Turns any repository into a client-ready deck with agents',
+    '{{TEAM_NAMES}}': 'Cesar Hinojosa, Cristiam Mamani, Johan Zerna',
     '{{DATE}}': date.today().strftime('%d %B %Y'),
-    '{{STATUS}}': 'Prototype',
-    '{{INDUSTRY}}': 'Developer Tools',
+    '{{STATUS}}': 'Prototype 2',
+    '{{INDUSTRY}}': 'Developer Tools and testing',
 }
 
 # Tags the current template is known to contain. Anything outside this set is
@@ -70,6 +70,6 @@ def main():
 if __name__ == '__main__':
     try:
         raise SystemExit(main())
-    except DocGenError as exc:
-        print(f'Error: {exc}', file=sys.stderr)
+    except Exception as exc:
+        print(f'\nError: {workspace.explain(exc)}', file=sys.stderr)
         raise SystemExit(1)
