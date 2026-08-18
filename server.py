@@ -1,8 +1,11 @@
 # server.py
 """MCP server exposing the documentation generators to Claude Code."""
 
+import json
+
 from mcp.server import MCPServer
 
+import extract
 import workspace
 from workspace import DocGenError
 
@@ -11,6 +14,22 @@ mcp = MCPServer('DocGenerator')
 # The browser-based OAuth flow would hang a tool call, so the server never
 # starts it; auth.py handles that once, in a real terminal.
 NON_INTERACTIVE = {'interactive': False}
+
+
+@mcp.tool()
+def gather_repo_evidence(repo_path: str = '.') -> str:
+    """Collect deterministic evidence about a repository, as JSON.
+
+    Returns candidate values with their sources for AGENT_NAME, TAGLINE,
+    TEAM_NAMES and DATE, plus the evidence behind a suggested STATUS and
+    INDUSTRY. Call this before generate_slides and interpret the result -- it
+    reports what the repository says, it does not decide what belongs on a
+    slide.
+    """
+    try:
+        return json.dumps(extract.gather(repo_path), indent=2)
+    except OSError as exc:
+        return f'Error reading repository: {exc}'
 
 
 @mcp.tool()

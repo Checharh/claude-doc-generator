@@ -1,0 +1,193 @@
+Hackathon_Brochure_Template.pptx — complete field inventory
+===========================================================
+
+Every fillable field in the 6-slide brochure, in PAYLOAD format (same shape as
+smoke_test.py). 50 fields total.
+
+Source: Hackathon_Brochure_Template.pptx, text extracted slide by slide.
+
+NOTE ON NAMING
+  Slide 1 reuses the six tags the presentation already uses, so a single
+  extraction manifest can feed both documents. Everything below slide 1 is
+  brochure-only.
+
+NOTE ON WHAT COUNTS AS A FIELD
+  Most fields appear as "[ bracketed prompts ]" in the template. Four do not --
+  PROBLEM_STATEMENT, AUDIENCE_DESCRIPTION, and the two guidance paragraphs --
+  they are written as instructional prose that the author overwrites. They are
+  included because they must be replaced; they will need the bracket-to-tag
+  mapping added by hand or the whole paragraph replaced.
+
+NOTE ON IMAGES
+  Three placeholders are images, not text, and cannot be filled by
+  replaceAllText:
+    slide 1  [Your logo goes here]
+    slide 3  [Add a diagram of the architecture of the solution]
+    slide 5  [ Insert screenshot, GIF, or video link of the agent in action ]
+  The third is listed below as DEMO_EVIDENCE because a link is acceptable there;
+  the first two need createImage requests instead.
+
+
+PAYLOAD = {
+    # ─────────────────────────────────────────────────────────────────────────
+    # SLIDE 1 — Project Header
+    # Shared with the presentation template.
+    # ─────────────────────────────────────────────────────────────────────────
+    '{{AGENT_NAME}}':  'Doc Generator',
+    '{{TAGLINE}}':     'Turns any repository into a client-ready deck',
+    '{{TEAM_NAMES}}':  'Cesar Hinojosa',
+    '{{DATE}}':        '18 August 2026',
+    '{{STATUS}}':      'Prototype',          # draft / ready for review / final
+    '{{INDUSTRY}}':    'Developer Tools',    # e.g. Retail, Supply Chain, Finance
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # SLIDE 2 — The Problem · Who It's For
+    # ─────────────────────────────────────────────────────────────────────────
+    '{{PROBLEM_STATEMENT}}':    "Building a client deck from a repository is manual "
+                                "and slow. Engineers rewrite the same context by hand "
+                                "for every review, and the result drifts from what the "
+                                "code actually does. Existing tools generate slides from "
+                                "outlines, not from source.",
+    '{{AUDIENCE_DESCRIPTION}}': 'Engineering teams presenting internal work to clients '
+                                'and stakeholders on short notice.',
+
+    '{{PERSONA_1_NAME}}':  'Engineering Lead',
+    '{{PERSONA_1_NEED}}':  'A deck that reflects the current state of the codebase',
+    '{{PERSONA_2_NAME}}':  'Delivery Manager',
+    '{{PERSONA_2_NEED}}':  'Consistent project framing across every client review',
+    '{{PERSONA_3_NAME}}':  'Solutions Architect',
+    '{{PERSONA_3_NEED}}':  'Accurate architecture summaries without rewriting them',
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # SLIDE 3 — How It Works · Architecture
+    # ─────────────────────────────────────────────────────────────────────────
+    '{{CAPABILITY_1}}':  'Repository extraction: reads manifests, README and git history',
+    '{{CAPABILITY_2}}':  'Confidence gating: every field carries a source, low ones are asked',
+    '{{CAPABILITY_3}}':  'Verified rendering: each replacement is counted, never silent',
+
+    '{{TECH_MODEL}}':         'Claude (via Claude Code)',
+    '{{TECH_DATA_SOURCES}}':  'Local repository, git history, Google Drive',
+    '{{TECH_TOOLS}}':         'MCP server, Google Slides API, Google Drive API',
+    '{{TECH_HOSTING}}':       'Local stdio MCP server',
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # SLIDE 4 — Problems Solved · Impact · KPIs
+    # ─────────────────────────────────────────────────────────────────────────
+    '{{BLOCKER_1_NAME}}':  'Manual deck assembly',
+    '{{BLOCKER_1_FIX}}':   'Generates the deck from the repository in one command',
+    '{{BLOCKER_2_NAME}}':  'Stale project descriptions',
+    '{{BLOCKER_2_FIX}}':   'Re-reads the source on every run, so it cannot drift',
+    '{{BLOCKER_3_NAME}}':  'Inconsistent framing between teams',
+    '{{BLOCKER_3_FIX}}':   'One master template and a fixed field vocabulary',
+
+    # Label each figure as measured or estimated.
+    '{{IMPACT_1_VALUE}}':   '90%',
+    '{{IMPACT_1_METRIC}}':  'less time spent assembling a deck (estimated)',
+    '{{IMPACT_2_VALUE}}':   '100%',
+    '{{IMPACT_2_METRIC}}':  'of fields traceable to a source (measured)',
+    '{{IMPACT_3_VALUE}}':   '0',
+    '{{IMPACT_3_METRIC}}':  'unfilled placeholders reaching a client (measured)',
+
+    '{{KPI_1_NAME}}':     'Time to first deck',
+    '{{KPI_1_FORMULA}}':  'minutes from command to shareable URL',
+    '{{KPI_1_TARGET}}':   'under 2 minutes',
+    '{{KPI_2_NAME}}':     'Field accuracy',
+    '{{KPI_2_FORMULA}}':  'fields accepted without edit / total fields',
+    '{{KPI_2_TARGET}}':   'above 80%',
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # SLIDE 5 — Demo/Evidence · Assumptions & Limitations
+    # ─────────────────────────────────────────────────────────────────────────
+    '{{DEMO_EVIDENCE}}':          'https://docs.google.com/presentation/d/.../edit',
+    '{{DEMO_SAMPLE}}':            'User ran /generate-slides -> Agent returned a filled '
+                                  'deck with all six fields sourced',
+
+    '{{ASSUMPTION_MOCKED}}':      'None; the pipeline runs against live Google Workspace APIs',
+    '{{ASSUMPTION_OUT_OF_SCOPE}}': 'Image and diagram generation; brochure output',
+    '{{ASSUMPTION_RISKS}}':       'OAuth tokens expire weekly in Testing mode; monorepos '
+                                  'with several manifests are not yet disambiguated',
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # SLIDE 6 — Related Links · What's Next
+    # ─────────────────────────────────────────────────────────────────────────
+    '{{LINK_REPO}}':         'https://github.com/Checharh/claude-doc-generator',
+    '{{LINK_DESIGN_DOC}}':   '',
+    '{{LINK_DECK}}':         '',
+    '{{LINK_OTHER}}':        '',
+
+    '{{NEXT_STEPS}}':        'Package as a Claude Code plugin for team-wide install, and '
+                             'add golden-repo regression tests over the extraction manifest',
+    '{{CONTACT}}':           'Cesar Hinojosa',
+}
+
+
+FIELD INDEX BY SLIDE
+====================
+
+  slide 1   6 fields   AGENT_NAME TAGLINE TEAM_NAMES DATE STATUS INDUSTRY
+  slide 2   8 fields   PROBLEM_STATEMENT AUDIENCE_DESCRIPTION
+                       PERSONA_{1,2,3}_{NAME,NEED}
+  slide 3   7 fields   CAPABILITY_{1,2,3}
+                       TECH_{MODEL,DATA_SOURCES,TOOLS,HOSTING}
+  slide 4  18 fields   BLOCKER_{1,2,3}_{NAME,FIX}
+                       IMPACT_{1,2,3}_{VALUE,METRIC}
+                       KPI_{1,2}_{NAME,FORMULA,TARGET}
+  slide 5   5 fields   DEMO_EVIDENCE DEMO_SAMPLE
+                       ASSUMPTION_{MOCKED,OUT_OF_SCOPE,RISKS}
+  slide 6   6 fields   LINK_{REPO,DESIGN_DOC,DECK,OTHER} NEXT_STEPS CONTACT
+  ─────────────────
+  total    50 fields
+
+
+ORIGINAL TEMPLATE TEXT -> TAG
+=============================
+
+The template does not contain {{TAGS}} yet. These are the literal strings to map,
+in the same form as PLACEHOLDER_MAP in setup_template.py. Note that several are
+identical strings repeated across the slide -- "[ what they need from the agent ]"
+appears three times, "[ XX% ]" three times -- so replaceAllText cannot tell them
+apart. Those need distinct text in the master template before they can be filled
+individually.
+
+  [ Agent Name ]                                    -> {{AGENT_NAME}}
+  [ One-line tagline: ... ]                         -> {{TAGLINE}}
+  [ names ]                                         -> {{TEAM_NAMES}}
+  [ date ]                                          -> {{DATE}}
+  [ draft / ready for review / final ]              -> {{STATUS}}
+  [ e.g., Retail, Supply Chain, Finance ]           -> {{INDUSTRY}}
+  [ Persona 1 ]                                     -> {{PERSONA_1_NAME}}
+  [ Persona 2 ]                                     -> {{PERSONA_2_NAME}}
+  [ Persona 3 ]                                     -> {{PERSONA_3_NAME}}
+  [ what they need from the agent ]         x3      -> {{PERSONA_n_NEED}}   AMBIGUOUS
+  [ Capability 1: name + one-line description ]     -> {{CAPABILITY_1}}
+  [ Capability 2: name + one-line description ]     -> {{CAPABILITY_2}}
+  [ Capability 3: name + one-line description ]     -> {{CAPABILITY_3}}
+  [ e.g., Gemini, Claude, GPT ]                     -> {{TECH_MODEL}}
+  [ e.g., BigQuery, Postgres, CRM ]                 -> {{TECH_DATA_SOURCES}}
+  [ e.g., MCP servers, APIs, retrieval ]            -> {{TECH_TOOLS}}
+  [ e.g., Cloud Run, ADK, local ]                   -> {{TECH_HOSTING}}
+  [ Blocker name ]                          x3      -> {{BLOCKER_n_NAME}}   AMBIGUOUS
+  [ how the agent removes it ]               x3     -> {{BLOCKER_n_FIX}}    AMBIGUOUS
+  [ XX% ]                                    x3     -> {{IMPACT_n_VALUE}}   AMBIGUOUS
+  [ metric it improves ]                     x3     -> {{IMPACT_n_METRIC}}  AMBIGUOUS
+  [ KPI name ]                               x2     -> {{KPI_n_NAME}}       AMBIGUOUS
+  [ how it's calculated ]                    x2     -> {{KPI_n_FORMULA}}    AMBIGUOUS
+  [ goal number ]                            x2     -> {{KPI_n_TARGET}}     AMBIGUOUS
+  [ Insert screenshot, GIF, or video link ... ]     -> {{DEMO_EVIDENCE}}
+  [ Sample interaction: "User asked ___ ..." ]      -> {{DEMO_SAMPLE}}
+  [ What was mocked or simulated ... ]              -> {{ASSUMPTION_MOCKED}}
+  [ What's explicitly out of scope ... ]            -> {{ASSUMPTION_OUT_OF_SCOPE}}
+  [ Known edge cases or risks ... ]                 -> {{ASSUMPTION_RISKS}}
+  [ Repo / codebase link ]                          -> {{LINK_REPO}}
+  [ Design doc / PRD link ]                         -> {{LINK_DESIGN_DOC}}
+  [ Slide deck / demo video link ]                  -> {{LINK_DECK}}
+  [ Any other supporting material ]                 -> {{LINK_OTHER}}
+  [ What does this team need to move ... ]          -> {{NEXT_STEPS}}
+  [ Team contact name / email ]                     -> {{CONTACT}}
+
+  (no bracketed text) "What's broken today for ..." -> {{PROBLEM_STATEMENT}}
+  (no bracketed text) "List the specific roles ..." -> {{AUDIENCE_DESCRIPTION}}
+
+The 13 AMBIGUOUS entries are the blocker: 8 distinct literals cover 21 slots.
+Fill them by hand in the master deck ({{PERSONA_1_NEED}}, {{PERSONA_2_NEED}}, ...)
+rather than trying to normalize them automatically.
