@@ -1,0 +1,20 @@
+# Copy to .docgen.yml in any repository to pin its presentation values.
+#
+# Anything set here is authoritative: the agent uses it verbatim and does not
+# second-guess it or ask about it. Omit a key to let extraction decide.
+#
+# Commit this file -- it is the repo's own answer to "what should the deck say",
+# and it makes every later run of /generate-slides ask nothing.
+
+agent_name: Atlas Router
+tagline: Routes support tickets to the right team in under a second
+team_names: Cesar Hinojosa, Ana Ruiz
+
+# One of: Concept | Prototype | MVP | Beta | Production
+status: Beta
+
+# One of: Fintech | Healthtech | Developer Tools | E-Commerce | Logistics |
+#         Marketing & Sales | Data & Analytics | Enterprise SaaS | Education |
+#         Media | Gaming | Real Estate | Legal | HR | Security |
+#         General Technology
+industry: Enterprise SaaS

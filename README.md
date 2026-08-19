@@ -11,8 +11,8 @@ repository  →  Claude Code  →  MCP server  →  Google Slides
                (extraction)    (rendering)     (your deck)
 ```
 
-**Status:** the rendering pipeline is working end to end. Repository extraction is next —
-today the values are supplied by hand.
+**Status:** working end to end — `/generate-slides` reads a repository and builds a deck.
+Packaging it for use in any repo is the remaining work.
 
 ---
 
@@ -168,6 +168,57 @@ Restart Claude Code so it picks up `.mcp.json`, then:
 
 ---
 
+## Usage
+
+From inside a repository:
+
+```
+/generate-slides            # extract, confirm, generate
+/generate-slides --yes      # no questions; uses documented fallbacks
+```
+
+Claude gathers evidence, shows what it found with a source and confidence per field, and
+generates the deck once you confirm:
+
+```
+  AGENT_NAME   Claude Doc Generator     <- README.md H1                [high]
+  TAGLINE      Turns any repository into a client-ready deck
+                                        <- README.md first paragraph   [medium]
+  TEAM_NAMES   Cesar Hinojosa           <- git shortlog                [high]
+  DATE         17 August 2026           <- system clock                [high]
+  STATUS       Prototype                <- 2 commits, no CI            [high]
+  INDUSTRY     Developer Tools          <- deps: mcp                   [high]
+```
+
+Low-confidence fields become multiple-choice questions with a recommendation, batched into
+a single round. Afterwards you can save the confirmed values so later runs ask nothing.
+
+### Pinning values per repo
+
+Copy `.docgen.yml.example` to `.docgen.yml` in any repository and set what you want fixed.
+These values are authoritative — extraction does not second-guess or re-ask them.
+
+```yaml
+agent_name: Atlas Router
+tagline: Routes support tickets to the right team in under a second
+status: Beta
+industry: Enterprise SaaS
+```
+
+### Inspecting extraction on its own
+
+`extract.py` is a plain function of the filesystem — no model involved — so you can see
+exactly what the agent will be handed:
+
+```bash
+./venv/bin/python extract.py /path/to/repo
+```
+
+It reports *candidates with sources*, never a decision. Which of three names is the product
+name needs reading comprehension; what `package.json` says does not.
+
+---
+
 ## Configuration
 
 Config resolves in this order, so a deployment can override the checked-out files without
@@ -200,6 +251,7 @@ Template IDs accept a bare ID **or** a pasted browser URL, everywhere.
 
 | File                | Role                                                                              |
 | ------------------- | --------------------------------------------------------------------------------- |
+| `extract.py`        | Deterministic repository evidence — manifests, git, dependency fingerprints       |
 | `workspace.py`      | OAuth, template resolution, Slides/Docs rendering, error translation              |
 | `server.py`         | MCP server — `generate_slides`, `generate_brochure`, `list_template_placeholders` |
 | `auth.py`           | One-time interactive Google authorization                                         |
@@ -207,6 +259,8 @@ Template IDs accept a bare ID **or** a pasted browser URL, everywhere.
 | `smoke_test.py`     | End-to-end test with hardcoded values                                             |
 | `.mcp.json`         | Registers the server with Claude Code                                             |
 | `.env.example`      | Documents every configuration variable                                            |
+| `.docgen.yml.example` | Per-repo value overrides, meant to be committed in target repos                 |
+| `.claude/commands/generate-slides.md` | The `/generate-slides` command and its extraction rulebook      |
 
 Generated at runtime, all gitignored: `credentials.json`, `token.json`, `templates.json`, `.env`.
 
@@ -216,6 +270,7 @@ Generated at runtime, all gitignored: `credentials.json`, `token.json`, `templat
 
 | Tool                         | Arguments                                                           |
 | ---------------------------- | ------------------------------------------------------------------- |
+| `gather_repo_evidence`       | `repo_path` — returns candidate values and their sources as JSON    |
 | `generate_slides`            | `agent_name`, `tagline`, `team_names`, `date`, `status`, `industry` |
 | `generate_brochure`          | `project_name`, `use_case`, `capabilities`                          |
 | `list_template_placeholders` | `kind` — `presentation` or `brochure`                               |
