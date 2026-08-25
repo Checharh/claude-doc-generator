@@ -31,7 +31,7 @@ Slides changes the next deck immediately.
 
 ### Placeholders
 
-The master template uses `{{TAG}}` placeholders. Six are supported:
+The master template uses `{{TAG}}` placeholders. Seven are supported:
 
 | Tag              | Content                                                     |
 | ---------------- | ----------------------------------------------------------- |
@@ -41,6 +41,7 @@ The master template uses `{{TAG}}` placeholders. Six are supported:
 | `{{DATE}}`       | Presentation date                                           |
 | `{{STATUS}}`     | `Concept` \| `Prototype` \| `MVP` \| `Beta` \| `Production` |
 | `{{INDUSTRY}}`   | Fixed taxonomy (Fintech, Developer Tools, …)                |
+| `{{LOGO}}`       | Image, not text — see [The logo image](#the-logo-image)     |
 
 `setup_template.py` normalizes other conventions (`[AGENT_NAME]`, `[ Agent / Project Name ]`)
 into this form, so a hand-made deck can be adopted without retyping it.
@@ -48,6 +49,63 @@ into this form, so a hand-made deck can be adopted without retyping it.
 A tag with **no slot in the template** is reported rather than silently dropped, and any
 `{{TAG}}` left unfilled is blanked before the deck is returned — a deck must never reach a
 client with `{{TAGLINE}}` printed on it.
+
+### The logo image
+
+`{{LOGO}}` is the odd one out: it is swapped for a picture, not text. Google fetches images
+**server-side, by URL**, and that single fact drives every rule below.
+
+**Format** — PNG, JPEG or GIF. Nothing else is accepted; `.svg`, `.webp`, `.ico`, `.avif`,
+`.bmp` and `.tiff` are refused *before* any API call, with the reason. SVG matters most
+here, because it is what most projects actually ship — export a PNG instead.
+
+**Limits** — under 50 MB, at most 25 megapixels, and if you pass a URL it must be under
+2 kB long and publicly reachable without login.
+
+**Shape — read this before designing the template.** The `{{LOGO}}` shape in the template
+is only a *position and size marker*. `replaceAllShapesWithImage` **deletes** that shape and
+drops a rectangular image into its bounding box; the geometry is discarded. Draw a circle,
+a star or a hexagon and you still get a rectangle. `imageReplaceMethod` does not change
+this — `CENTER_INSIDE` fits the whole image inside the box, `CENTER_CROP` fills it and cuts
+the overflow, and both cuts are rectangular. The Slides API has no shape-masking request at
+all; "Mask image" is a UI-only feature.
+
+So to get a non-rectangular logo, **bake the silhouette into the image's alpha channel**:
+save a PNG with transparency outside the shape you want. The image element stays a
+rectangle, but the transparent pixels make it read as a circle — or a star — on any
+background. A logo saved as opaque RGB on a white square will appear as a white square.
+
+**Framing** — crop tight to the artwork. `CENTER_INSIDE` fits the *entire* image into the
+shape, so built-in margin is dead space that shrinks the visible logo. A square-ish, tightly
+cropped image fills the slot best.
+
+**Where it comes from**, in the order the picker prefers:
+
+| Source | Upload? | Notes |
+| --- | --- | --- |
+| `logo_url:` in `.docgen.yml` | No | Authoritative — nothing else is consulted |
+| A file in the repository | **Yes** | Uploaded to Drive and shared with *anyone who has the link* |
+| A README image | No | Only absolute URLs; badges are excluded |
+| `opengraph.githubassets.com/1/<owner>/<repo>` | No | The repo's social card; always renders |
+| `github.com/<owner>.png` | No | The owner or org avatar |
+
+Repository files are found by name, in the top level of the repo root, `.github/`, `docs/`,
+`doc/`, `assets/`, `public/`, `static/`, `src/assets/`, `images/`, `img/`, `media/` or
+`resources/` — and the filename must contain `logo`, `icon`, `banner`, `hero`, `brand`,
+`wordmark` or similar. Subdirectories of those are not scanned.
+
+Prefer a hosted URL over a repository file. Uploading sets Drive permission
+`{'role': 'reader', 'type': 'anyone'}`, which is a real disclosure — it has to be, because
+Google's fetcher is anonymous — and every run uploads another copy. A public repo's own
+`raw.githubusercontent.com` URL avoids both, and pinning it in `.docgen.yml` means the
+picker never looks anywhere else.
+
+If no usable logo is found the deck is generated without one and `{{LOGO}}` is swept blank.
+A report of `{{LOGO}}=0` means the opposite problem — the template has no shape containing
+the tag, so add one rather than retrying.
+
+See [`IMAGES.md`](IMAGES.md) for the full walkthrough, including adding the placeholder
+shape and wiring up more than one image.
 
 ---
 
@@ -98,6 +156,37 @@ A local `.pptx` works too — it gets uploaded and converted:
 ```bash
 ./venv/bin/python setup_template.py --pptx MyTemplate.pptx
 ```
+
+### If the template changes
+
+Whether you need to touch anything depends on *how* it changed:
+
+**Edited in place** — moving shapes, restyling, adding a `{{LOGO}}` box, fixing a typo on
+the master. The Drive file ID does not change, so there is nothing to update. Every run
+copies the master fresh, so the next deck picks the edits up automatically.
+
+**Replaced by a different file** — uploading a new `.pptx`, *File → Make a copy*, building a
+new deck from scratch, or switching to someone else's. This creates a **new file with a new
+ID**, and the configured ID must be updated or you will keep generating from the old one:
+
+```bash
+./venv/bin/python setup_template.py --drive "<new URL or ID>"   # writes templates.json
+```
+
+**If you also set `DOCGEN_PRESENTATION_TEMPLATE_ID` in `.env`, update it there too.** Config
+resolves `process env > .env > templates.json`, so a stale ID in `.env` silently wins over
+whatever `setup_template.py` just registered — the most confusing way to get this wrong.
+The same applies to `DOCGEN_BROCHURE_TEMPLATE_ID`.
+
+Nothing errors when the ID is stale. The deck generates normally, just from the wrong
+master — so confirm which tags the configured template actually exposes:
+
+```bash
+./venv/bin/python setup_template.py --drive "<ID>" --dump | grep LOGO
+```
+
+or call `list_template_placeholders` from Claude Code. A tag reported as `x0` after a
+template swap usually means the new master is missing a slot the old one had.
 
 ---
 

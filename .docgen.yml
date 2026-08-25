@@ -1,0 +1,8 @@
+# docgen overrides -- tier 1, authoritative.
+# Regenerate the deck with: /generate-slides
+agent_name: Claude Doc Generator
+tagline: Turn any local repository into a client-ready Google Slides deck
+team_names: Cesar Hinojosa
+status: Prototype
+industry: Developer Tools
+logo_url: https://raw.githubusercontent.com/Checharh/claude-doc-generator/DOC-03/logodoca.png
