@@ -1,7 +1,7 @@
 ---
 description: Generate a Google Slides deck from this repository
 argument-hint: "[--yes] [path]"
-allowed-tools: Read, Grep, Glob, Bash(git shortlog:*), Bash(git log:*), Bash(date:*), Write, AskUserQuestion, mcp__doc-generator__gather_repo_evidence, mcp__doc-generator__list_template_placeholders, mcp__doc-generator__generate_slides
+allowed-tools: Read, Grep, Glob, Bash(git shortlog:*), Bash(git log:*), Bash(date:*), Write, AskUserQuestion, mcp__doc-generator__gather_repo_evidence, mcp__doc-generator__list_template_placeholders, mcp__doc-generator__generate_slides, mcp__doc-generator__list_logo_candidates
 ---
 
 Generate a presentation for the repository at `$1` (default: the current directory).
@@ -49,14 +49,45 @@ Batch every question into that single round. If any field is `low`, use
 `AskUserQuestion` with concrete options and your recommendation first; never ask an
 open-ended question like "what industry is this?" when you can offer four choices.
 
+## Step 3.5 — Pick a logo
+
+Call `mcp__doc-generator__list_logo_candidates` with the repository path. It reports
+each source marked `usable` or `BLOCKED`, with the reason.
+
+Google fetches images server-side, so the rules are strict and not negotiable:
+
+- **PNG, JPEG and GIF only.** SVG is rejected by the API. A repo whose only logo is
+  an SVG has no usable file — say so and use a GitHub URL instead.
+- A **URL** is used as-is. A **repository file** is uploaded to Drive and shared
+  with anyone who has the link.
+
+Prefer, in order:
+
+1. `logo_url` from `.docgen.yml` — authoritative.
+2. A `usable` repository file, if it is plausibly the project's own brand mark.
+   `hero.png` or `banner.png` usually is; `screenshot.png` is not.
+3. `https://github.com/<owner>.png` — the owner avatar. Always works, no upload.
+
+**Uploading a repo file makes that image readable by anyone with the link.** If you
+are choosing a local file rather than a URL, say so in the confirmation table and let
+the user pick. Never upload silently.
+
+If no candidate is usable, generate without a logo and say why. A missing logo is
+fine; the tag is swept blank.
+
 ## Step 4 — Generate
 
 Call `mcp__doc-generator__list_template_placeholders` to see which tags the template
-supports, then `mcp__doc-generator__generate_slides` with the confirmed values.
+supports, then `mcp__doc-generator__generate_slides` with the confirmed values, plus
+`logo_url` **or** `logo_path` + `repo_path` if a logo was chosen.
 
 Return the deck URL. The tool reports a replacement count per tag:
 
 - `x0` means the template has no slot for that tag — say so; the value was dropped
+- `Images: {{LOGO}}=0` means the template has **no shape containing `{{LOGO}}`**.
+  The logo did not land. Tell the user to add one — see `IMAGES.md` Step 1 — rather
+  than retrying, which will fail the same way.
+- If a file was uploaded, report the Drive file and that it is link-shared.
 - On an error, surface it verbatim. Do not retry with altered arguments.
 
 ## Step 5 — Persist
@@ -70,6 +101,7 @@ tagline: Routes support tickets to the right team in under a second
 team_names: Cesar Hinojosa, Ana Ruiz
 status: Beta
 industry: Enterprise SaaS
+logo_url: https://github.com/acme.png
 ```
 
 ---

@@ -1,0 +1,7 @@
+[console_scripts]
+docgen = docgen.frontends.cli:main
+docgen-mcp = docgen.frontends.mcp_server:main
+
+[docgen.renderers]
+docx = docgen.render.docx_brochure
+slides = docgen.render.slides

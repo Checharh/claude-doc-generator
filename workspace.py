@@ -18,6 +18,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
 SCOPES = [
     'https://www.googleapis.com/auth/documents',
@@ -60,6 +61,12 @@ CONFIG_DIR = Path(os.environ.get('DOCGEN_CONFIG_DIR', _HERE))
 CREDENTIALS_PATH = Path(os.environ.get('DOCGEN_CREDENTIALS', CONFIG_DIR / 'credentials.json'))
 TOKEN_PATH = Path(os.environ.get('DOCGEN_TOKEN', CONFIG_DIR / 'token.json'))
 TEMPLATES_PATH = Path(os.environ.get('DOCGEN_TEMPLATES', CONFIG_DIR / 'templates.json'))
+
+# The agent-catalog brochure is a local .docx filled on disk, not a Drive master
+# copied in place -- its fields carry no {{TAGS}} to replace remotely. They are
+# marked by a gray "field key: <name>" tag under each label instead.
+BROCHURE_DOCX_PATH = Path(os.environ.get(
+    'DOCGEN_BROCHURE_DOCX', CONFIG_DIR / 'Agentic_AI_Brochure_Template.docx'))
 
 # Brochure lives in Docs and predates this rewrite; keep the known-good default.
 DEFAULT_BROCHURE_TEMPLATE_ID = '1spO_SmbQDeJlWfI_jZztgfvA5KAGOpWGU5QnaeSPSlg'
@@ -202,7 +209,9 @@ def _services(interactive=True):
 # ---------------------------------------------------------------------- templates
 
 
-FILE_ID_RE = re.compile(r'/d/([a-zA-Z0-9_-]{15,})')
+# /d/<id> covers Docs, Slides and Sheets; /folders/<id> covers a Drive folder,
+# which is the URL you get from the address bar when picking an output folder.
+FILE_ID_RE = re.compile(r'/(?:d|folders)/([a-zA-Z0-9_-]{15,})')
 
 
 def parse_file_id(value):
@@ -320,11 +329,60 @@ def _occurrences(response, tags):
     return counts
 
 
-def render_presentation(values, title=None, folder_id=None, interactive=True):
+def output_folder(folder_id=None):
+    """Drive folder for generated files: explicit argument, then .env, then root.
+
+    Accepts a folder URL as well as a bare ID, because that is what you get
+    from the address bar.
+    """
+    chosen = folder_id or os.environ.get('DOCGEN_OUTPUT_FOLDER_ID', '')
+    return parse_file_id(chosen.strip()) if chosen.strip() else None
+
+
+def _image_requests(images, fit='CENTER_INSIDE'):
+    """Swap each placeholder shape for an image.
+
+    replaceAllShapesWithImage takes over the shape the designer drew, so the
+    image inherits its position and size. That is why the template needs a real
+    shape holding {{LOGO}} rather than just the text typed into a slide -- text
+    in a body placeholder has no box of its own to inherit.
+
+    CENTER_INSIDE fits the whole image inside the shape and keeps its aspect
+    ratio; CENTER_CROP fills the shape and crops the overflow. A logo must
+    never be cropped, so CENTER_INSIDE is the default.
+    """
+    return [
+        {
+            'replaceAllShapesWithImage': {
+                'imageUrl': url,
+                'imageReplaceMethod': fit,
+                'containsText': {'text': tag, 'matchCase': True},
+            }
+        }
+        for tag, url in images.items()
+    ]
+
+
+def _image_occurrences(response, tags, offset):
+    """Count image swaps, reading the replies that follow the text ones."""
+    replies = response.get('replies', [])[offset:]
+    counts = {}
+    for tag, reply in zip(tags, replies):
+        counts[tag] = (reply or {}).get(
+            'replaceAllShapesWithImage', {}).get('occurrencesChanged', 0)
+    return counts
+
+
+def render_presentation(values, title=None, folder_id=None, interactive=True,
+                        images=None, image_fit='CENTER_INSIDE'):
     """Clone the master template, fill it in, and report what actually changed.
 
-    Returns {url, id, occurrences, orphans}. The caller decides how loudly to
-    complain about zero-occurrence tags.
+    `images` maps a placeholder tag to a publicly fetchable image URL, e.g.
+    {'{{LOGO}}': 'https://github.com/acme.png'}. Google fetches these
+    server-side, so a local path will not work -- see images.resolve().
+
+    Returns {url, id, occurrences, image_occurrences, orphans}. The caller
+    decides how loudly to complain about zero-occurrence tags.
     """
     template_id = _require_template('presentation')
     drive_service, slides_service, _ = _services(interactive=interactive)
@@ -339,17 +397,24 @@ def render_presentation(values, title=None, folder_id=None, interactive=True):
     new_id = copy['id']
 
     tags = list(values)
+    image_tags = list(images or {})
+    requests = _replace_requests(values) + _image_requests(images or {}, image_fit)
+
     response = slides_service.presentations().batchUpdate(
-        presentationId=new_id, body={'requests': _replace_requests(values)}
+        presentationId=new_id, body={'requests': requests}
     ).execute()
     occurrences = _occurrences(response, tags)
+    image_occurrences = _image_occurrences(response, image_tags, len(tags))
 
+    # Sweep after the image swap, or the {{LOGO}} text inside the placeholder
+    # shape gets blanked before replaceAllShapesWithImage can match on it.
     orphans = _sweep_orphans(new_id, slides_service)
 
     return {
         'url': f'https://docs.google.com/presentation/d/{new_id}/edit',
         'id': new_id,
         'occurrences': occurrences,
+        'image_occurrences': image_occurrences,
         'orphans': orphans,
     }
 
@@ -377,8 +442,17 @@ def _sweep_orphans(presentation_id, slides_service):
 
 
 def generate_google_slides(agent_name, tagline, team_names, date, status, industry,
-                           interactive=True):
-    """Clone the master presentation template and replace the key variables."""
+                           interactive=True, logo_url=None, logo_path=None,
+                           repo_path=None):
+    """Clone the master presentation template and replace the key variables.
+
+    A logo may be given either as a URL (used as-is) or as a local path, which
+    is uploaded to Drive and shared first, because Google fetches images
+    server-side. Both are optional; without one the {{LOGO}} placeholder is
+    swept blank like any other unfilled tag.
+    """
+    import images as images_mod
+
     values = {
         '{{AGENT_NAME}}': agent_name,
         '{{TAGLINE}}': tagline,
@@ -387,14 +461,30 @@ def generate_google_slides(agent_name, tagline, team_names, date, status, indust
         '{{STATUS}}': status,
         '{{INDUSTRY}}': industry,
     }
-    result = render_presentation(values, interactive=interactive)
+
+    image_map = {}
+    upload = None
+    if logo_url or logo_path:
+        drive_service, _, _ = _services(interactive=interactive)
+        resolved = images_mod.resolve(
+            logo_url or logo_path, root=repo_path,
+            drive_service=drive_service, folder_id=output_folder(),
+        )
+        image_map['{{LOGO}}'] = resolved['url']
+        upload = resolved if resolved.get('uploaded') else None
+
+    result = render_presentation(values, interactive=interactive, images=image_map)
 
     unmatched = [tag for tag, count in result['occurrences'].items() if count == 0]
+    if image_map:
+        unmatched += [t for t, n in result['image_occurrences'].items() if n == 0]
     if unmatched:
         result['warning'] = (
             'These tags are not present in the template, so their values were dropped: '
             + ', '.join(unmatched)
         )
+    if upload:
+        result['logo_upload'] = upload
     return result
 
 
@@ -423,4 +513,100 @@ def generate_google_doc(project_name, use_case, capabilities, interactive=True):
         'url': f'https://docs.google.com/document/d/{new_id}/edit',
         'id': new_id,
         'occurrences': _occurrences(response, tags),
+    }
+
+
+DOCX_MIME = ('application/vnd.openxmlformats-officedocument'
+             '.wordprocessingml.document')
+GOOGLE_DOC_MIME = 'application/vnd.google-apps.document'
+
+
+def upload_docx(path, name=None, folder_id=None, convert=True, interactive=True):
+    """Upload a filled .docx to Drive. Returns {url, id, name, folder}.
+
+    Unlike the template generators, this uploads a file built locally rather
+    than copying a Drive master -- the .docx template is filled on disk, then
+    pushed. With convert=True Drive turns it into an editable Google Doc; with
+    convert=False it stays a .docx you download.
+    """
+    source = Path(path)
+    if not source.exists():
+        raise DocGenError(f'Nothing to upload: {source} does not exist.')
+
+    drive_service, _, _ = _services(interactive=interactive)
+
+    body = {'name': name or source.stem}
+    folder = output_folder(folder_id)
+    if folder:
+        body['parents'] = [folder]
+    if convert:
+        body['mimeType'] = GOOGLE_DOC_MIME
+
+    media = MediaFileUpload(str(source), mimetype=DOCX_MIME, resumable=False)
+    created = drive_service.files().create(
+        body=body, media_body=media, fields='id,name,webViewLink',
+        supportsAllDrives=True,
+    ).execute()
+
+    return {
+        'url': created.get('webViewLink')
+               or f"https://docs.google.com/document/d/{created['id']}/edit",
+        'id': created['id'],
+        'name': created.get('name', body['name']),
+        'folder': folder or 'My Drive (root)',
+    }
+
+
+def brochure_fields(template=None):
+    """Field keys in the brochure .docx, mapped to their placeholder text."""
+    import fill_docx
+
+    source = Path(template or BROCHURE_DOCX_PATH)
+    if not source.exists():
+        raise DocGenError(
+            f'Brochure template not found at {source}. Set DOCGEN_BROCHURE_DOCX '
+            'to point at the .docx.'
+        )
+    return fill_docx.field_keys(source)
+
+
+def render_brochure_docx(values, name=None, folder_id=None, template=None,
+                         keep_local=None, interactive=True):
+    """Fill the brochure .docx and upload it. Returns {url, id, filled, skipped}.
+
+    Mirrors render_presentation's contract: the caller supplies decided values,
+    this reports exactly which fields were written and which were left showing
+    the template's own guidance text.
+    """
+    import fill_docx
+
+    source = Path(template or BROCHURE_DOCX_PATH)
+    if not source.exists():
+        raise DocGenError(
+            f'Brochure template not found at {source}. Set DOCGEN_BROCHURE_DOCX '
+            'to point at the .docx.'
+        )
+
+    known = set(fill_docx.field_keys(source))
+    unknown = sorted(set(values) - known)
+    if unknown:
+        raise DocGenError(
+            'No such field key in the template: ' + ', '.join(unknown)
+            + '. Call list_brochure_fields to see the valid keys.'
+        )
+
+    local = Path(keep_local or source.with_name(source.stem.replace('_Template', '')
+                                                + '_Filled.docx'))
+    report = fill_docx.fill(source, local, values)
+    uploaded = upload_docx(local, name=name, folder_id=folder_id,
+                           convert=True, interactive=interactive)
+
+    return {
+        'url': uploaded['url'],
+        'id': uploaded['id'],
+        'name': uploaded['name'],
+        'folder': uploaded['folder'],
+        'local': str(local),
+        'filled': report['filled'],
+        'skipped': report['untouched'],
     }

@@ -1,0 +1,403 @@
+Metadata-Version: 2.4
+Name: docgen
+Version: 0.2.0
+Summary: Turn any repository into a client-ready Google Doc or Slides deck
+License: Proprietary
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: mcp==2.0.0
+Requires-Dist: google-api-python-client==2.198.0
+Requires-Dist: google-auth==2.56.3
+Requires-Dist: google-auth-oauthlib==1.4.0
+Requires-Dist: google-auth-httplib2==0.4.1
+Provides-Extra: ai
+Requires-Dist: anthropic>=0.69; extra == "ai"
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+
+# Claude Doc Generator
+
+Turn any repository into a client-ready Google Slides deck or catalog brochure.
+
+The tool reads a codebase — README, manifests, git history, dependencies — works out what
+the project _is_, and fills a template with the result.
+
+```
+repository  →  extract  →  author  →  gate  →  render  →  Google Drive
+               (no model)  (a model) (rules)  (no model)
+```
+
+**Anything that can produce a manifest can drive the second half.** Claude Code reading a
+command file is one such producer; the Anthropic SDK is another. Use whichever you have:
+
+```bash
+docgen generate . --spec brochure     # standalone, needs docgen[ai]
+/generate-brochure                    # inside Claude Code, no API key
+```
+
+**Status:** working end to end by both routes.
+
+---
+
+## How it works
+
+Generation is deliberately split in two, because the halves have different failure modes:
+
+| Stage                                                             | Who         | Determinism                                                       |
+| ----------------------------------------------------------------- | ----------- | ----------------------------------------------------------------- |
+| **Extraction** — read the repo, decide what each field should say | Claude Code | Stochastic. Verified by showing you the values before generating. |
+| **Rendering** — clone the template, replace tags, verify          | MCP server  | Deterministic. Every replacement is counted.                      |
+
+The template lives in **Google Drive**, not on disk. `templates.json` (or `.env`) holds a
+Drive file ID; each generation copies that live file, so editing the master in Google
+Slides changes the next deck immediately.
+
+### Placeholders
+
+The master template uses `{{TAG}}` placeholders. Six are supported:
+
+| Tag              | Content                                                     |
+| ---------------- | ----------------------------------------------------------- |
+| `{{AGENT_NAME}}` | Project or agent name                                       |
+| `{{TAGLINE}}`    | One line, benefit-oriented, ≤ 12 words                      |
+| `{{TEAM_NAMES}}` | Comma-separated, no emails                                  |
+| `{{DATE}}`       | Presentation date                                           |
+| `{{STATUS}}`     | `Concept` \| `Prototype` \| `MVP` \| `Beta` \| `Production` |
+| `{{INDUSTRY}}`   | Fixed taxonomy (Fintech, Developer Tools, …)                |
+
+`setup_template.py` normalizes other conventions (`[AGENT_NAME]`, `[ Agent / Project Name ]`)
+into this form, so a hand-made deck can be adopted without retyping it.
+
+A tag with **no slot in the template** is reported rather than silently dropped, and any
+`{{TAG}}` left unfilled is blanked before the deck is returned — a deck must never reach a
+client with `{{TAGLINE}}` printed on it.
+
+---
+
+## Setup
+
+### 1. Install
+
+```bash
+python3 -m venv venv
+./venv/bin/pip install -e .          # add [ai] for the standalone route
+```
+
+`pip install -e ".[ai]"` pulls in the Anthropic SDK. Without it, extraction and rendering
+still work — that is the Claude Code route, which costs no API key and no tokens.
+
+### 2. Google Cloud
+
+In one Google Cloud project:
+
+1. Enable the **Drive**, **Slides**, and **Docs** APIs — all three, same project
+2. **OAuth consent screen** → External, publishing status _Testing_, and add your Google
+   account under **Test users**
+3. **Credentials → Create OAuth client ID → Desktop app** → download the JSON
+4. Save it as `credentials.json` in the project folder
+
+> Leave the app in _Testing_. The `drive` scope is **restricted**, so publishing to
+> Production triggers Google's full verification process — weeks of work for an internal
+> tool. Testing mode allows 100 test users. The trade-off is that refresh tokens expire
+> after 7 days, so you re-run `auth.py` about weekly.
+
+### 3. Authorize
+
+```bash
+./venv/bin/docgen auth
+```
+
+Opens a browser once and writes `token.json`. You'll see a _"Google hasn't verified this
+app"_ warning — expected; choose **Advanced → Go to … (unsafe)** and grant all three scopes.
+
+### 4. Register a template
+
+Point it at a Slides deck already in your Drive:
+
+```bash
+./venv/bin/python setup_template.py --list                    # browse your decks
+./venv/bin/python setup_template.py --drive "<URL or ID>"     # register one
+```
+
+A local `.pptx` works too — it gets uploaded and converted:
+
+```bash
+./venv/bin/python setup_template.py --pptx MyTemplate.pptx
+```
+
+---
+
+## Testing
+
+### End-to-end smoke test
+
+Pushes six hardcoded values into a real deck. No repository analysis, no agent — this
+tests only the Google pipeline.
+
+```bash
+./venv/bin/python smoke_test.py
+```
+
+Passing output:
+
+```
+Template placeholders:
+  {{AGENT_NAME}}, {{DATE}}, {{INDUSTRY}}, {{STATUS}}, {{TAGLINE}}, {{TEAM_NAMES}}
+
+Generating deck with hardcoded values...
+
+Replacements:
+  [ok  ] {{AGENT_NAME}}   x1   Doc Generator
+  [ok  ] {{TAGLINE}}      x1   Turns any repository into a client-ready deck
+  [ok  ] {{TEAM_NAMES}}   x1   Cesar Hinojosa
+  [ok  ] {{DATE}}         x1   17 August 2026
+  [ok  ] {{STATUS}}       x1   Prototype
+  [ok  ] {{INDUSTRY}}     x1   Developer Tools
+
+Deck: https://docs.google.com/presentation/d/.../edit
+
+PASS: every required placeholder was replaced.
+```
+
+Exit code is `1` if any required tag replaced nothing. `x0` means the tag isn't in the
+template — a mapping problem, not an API problem.
+
+### Inspect a template
+
+```bash
+./venv/bin/python setup_template.py --drive "<ID>" --dump
+```
+
+Prints every text string in the deck. This is the tool for "why didn't my tag get
+replaced" — usually the template says something slightly different from what you expect.
+
+### Verify the MCP server
+
+Confirms the server starts, handshakes over stdio, and exposes its tools:
+
+```bash
+./venv/bin/python -m pytest -q          # 77 tests, no network, no API key
+```
+
+And that the server itself starts and exposes its tools:
+
+```bash
+./venv/bin/python -c "
+import asyncio
+from docgen.frontends import mcp_server
+print([t.name for t in asyncio.run(mcp_server.mcp.list_tools())])"
+```
+
+### From inside Claude Code
+
+Restart Claude Code so it picks up `.mcp.json`, then:
+
+```
+/mcp                                  → doc-generator should be connected
+"list the template placeholders"      → returns the six tags
+```
+
+---
+
+## Usage
+
+From inside a repository:
+
+```
+/generate-slides            # extract, confirm, generate
+/generate-slides --yes      # no questions; uses documented fallbacks
+```
+
+Claude gathers evidence, shows what it found with a source and confidence per field, and
+generates the deck once you confirm:
+
+```
+  AGENT_NAME   Claude Doc Generator     <- README.md H1                [high]
+  TAGLINE      Turns any repository into a client-ready deck
+                                        <- README.md first paragraph   [medium]
+  TEAM_NAMES   Cesar Hinojosa           <- git shortlog                [high]
+  DATE         17 August 2026           <- system clock                [high]
+  STATUS       Prototype                <- 2 commits, no CI            [high]
+  INDUSTRY     Developer Tools          <- deps: mcp                   [high]
+```
+
+Low-confidence fields become multiple-choice questions with a recommendation, batched into
+a single round. Afterwards you can save the confirmed values so later runs ask nothing.
+
+### Pinning values per repo
+
+Copy `.docgen.yml.example` to `.docgen.yml` in any repository and set what you want fixed.
+These values are authoritative — extraction does not second-guess or re-ask them.
+
+```yaml
+agent_name: Atlas Router
+tagline: Routes support tickets to the right team in under a second
+status: Beta
+industry: Enterprise SaaS
+```
+
+### Inspecting extraction on its own
+
+`extract.py` is a plain function of the filesystem — no model involved — so you can see
+exactly what the agent will be handed:
+
+```bash
+./venv/bin/docgen evidence /path/to/repo
+```
+
+It reports *candidates with sources*, never a decision. Which of three names is the product
+name needs reading comprehension; what `package.json` says does not.
+
+---
+
+## Without Claude Code
+
+The rulebook lives in `docgen/specs/` as data, so the same rules apply whichever front end
+you use.
+
+### Command line
+
+```bash
+docgen evidence .                     # what the repo says, as JSON — no model
+docgen fields --spec brochure         # the field keys and the rules on each
+docgen generate . --spec brochure     # evidence → manifest → gate → document
+docgen plugins                        # what is registered
+```
+
+`docgen generate` needs `docgen[ai]` and an Anthropic credential. Everything else does not.
+
+### As a library
+
+```python
+import docgen
+
+out = docgen.run('/path/to/repo', 'brochure')      # needs docgen[ai]
+print(out['url'], out['gate'].report())
+
+out = docgen.generate(my_manifest, 'brochure')     # bring your own manifest
+```
+
+### The confidence gate
+
+Every field must carry a real source and clear a per-field confidence floor, or it is
+dropped and the template's own guidance text stays visible. This is enforced in code, not
+by whoever wrote the manifest:
+
+```
+Filled (2): agent_name, category
+Dropped (2): value_summary (no source cited); kpis_focus (confidence medium below high)
+```
+
+`operational_impact`, `value_summary` and `kpis_focus` ask for before/after numbers, so they
+require **high** confidence. A repository that measures nothing cannot fill them, which is
+the correct outcome — an omitted field reads as an open item, an invented one does not.
+
+### Extending it
+
+Extractors, renderers and specs are entry-point registries. A third party extends the tool
+by installing a package, never by editing this one:
+
+```toml
+[project.entry-points."docgen.renderers"]
+pdf = "docgen_pdf:PdfRenderer"
+```
+
+Built-ins register through the same door, and win on a name collision so an installed
+plugin cannot silently change what an existing command produces.
+
+---
+
+## Configuration
+
+Config resolves in this order, so a deployment can override the checked-out files without
+editing anything:
+
+```
+process env  >  .env  >  templates.json  >  built-in default
+```
+
+```bash
+cp .env.example .env
+```
+
+| Variable                          | Default                               |
+| --------------------------------- | ------------------------------------- |
+| `DOCGEN_PRESENTATION_TEMPLATE_ID` | from `templates.json`                 |
+| `DOCGEN_BROCHURE_TEMPLATE_ID`     | from `templates.json`                 |
+| `DOCGEN_OUTPUT_FOLDER_ID`         | none — decks land in My Drive root    |
+| `DOCGEN_CONFIG_DIR`               | the checkout, else `~/.config/docgen` |
+| `DOCGEN_CREDENTIALS`              | `$DOCGEN_CONFIG_DIR/credentials.json` |
+| `DOCGEN_TOKEN`                    | `$DOCGEN_CONFIG_DIR/token.json`       |
+| `DOCGEN_TEMPLATES`                | `$DOCGEN_CONFIG_DIR/templates.json`   |
+| `DOCGEN_ENV_FILE`                 | `$DOCGEN_CONFIG_DIR/.env`             |
+| `DOCGEN_BROCHURE_DOCX`            | the template shipped in the package   |
+| `DOCGEN_MODEL`                    | `claude-opus-5`                       |
+| `ANTHROPIC_API_KEY`               | required only for the standalone route |
+
+Template IDs accept a bare ID **or** a pasted browser URL, everywhere.
+
+---
+
+## Project layout
+
+| Path | Role |
+| ---- | ---- |
+| `docgen/core/` | Manifest types, template specs, the confidence gate, plugin registries |
+| `docgen/extract/` | Deterministic repository evidence — manifests, git, dependency fingerprints |
+| `docgen/authoring/` | Evidence → manifest via the Anthropic SDK *(optional extra)* |
+| `docgen/render/` | Renderers: `docx` (brochure), `slides` (deck) |
+| `docgen/specs/` | The rulebook as data — field keys, enums, omit policy |
+| `docgen/frontends/` | The MCP server and the `docgen` command |
+| `docgen/workspace.py` | OAuth, template resolution, Drive/Slides/Docs, error translation |
+| `docgen/pipeline.py` | The four stages wired together |
+| `tests/` | 77 tests — no network, no API key |
+| `server.py`, `auth.py` | Compatibility shims for an existing `.mcp.json` |
+| `setup_template.py` | Register a template; normalize placeholders; inspect decks |
+| `.mcp.json.example` | Portable MCP registration — replace `DOCGEN_HOME` |
+| `.docgen.yml.example` | Per-repo value overrides, meant to be committed in target repos |
+
+Generated at runtime, all gitignored: `credentials.json`, `token.json`, `templates.json`, `.env`.
+
+---
+
+## MCP tools
+
+| Tool | Arguments |
+| ---- | --------- |
+| `gather_repo_evidence` | `repo_path` — a local path or a git URL; returns candidates and sources as JSON |
+| `list_spec_fields` | `spec_name` — field keys and the rules enforced on each |
+| `generate_document` | `values_json` (a manifest), `spec_name`, `name`, `folder_id` |
+| `list_brochure_fields` | — the `.docx` field keys and their placeholder text |
+| `generate_brochure_docx` | `values_json` (plain `{key: value}`), `name`, `folder_id` |
+| `generate_slides` | `agent_name`, `tagline`, `team_names`, `date`, `status`, `industry` |
+| `upload_brochure` | `docx_path`, `name`, `folder_id` |
+| `list_template_placeholders` | `kind` — `presentation` or `brochure` |
+
+`generate_document` takes a **manifest** — each field as `{value, source, confidence}` — and
+runs it through the confidence gate before rendering. `generate_brochure_docx` takes plain
+strings and bypasses the gate; it exists for the current `/generate-brochure` command.
+
+`generate_slides` returns the deck URL plus a per-tag replacement count, so a template
+mismatch is visible in the tool result rather than discovered by opening the deck.
+
+The server never starts the interactive OAuth flow — it would hang the tool call. If the
+token is missing or expired it returns instructions to run `auth.py`.
+
+---
+
+## Troubleshooting
+
+| Symptom                                                               | Fix                                                                                                |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `Google Drive API is not enabled in project N`                        | Enable Drive, Slides **and** Docs in that project; wait ~2 min                                     |
+| `Access blocked: … has not completed the Google verification process` | Add your account under **Test users** in the project that owns your `client_id`                    |
+| `Not authorized with Google`                                          | Run `auth.py`                                                                                      |
+| `RefreshError`, or auth stops working after ~a week                   | Testing-mode tokens expire in 7 days. Delete `token.json`, re-run `auth.py`                        |
+| Tags report `x0`                                                      | The template lacks those tags. `--dump` to see its text, then re-run `setup_template.py`           |
+| `does not match the pattern "^[^/]+$"`                                | A URL reached the API raw — fixed; update if you're on older code                                  |
+| `No presentation template configured`                                 | Run `setup_template.py --drive "<URL>"`                                                            |
+| Slides API 400 on `batchUpdate`                                       | Template is an unconverted `.pptx` in Drive. Re-register with `--drive`; it converts automatically |
+
+Errors route through `workspace.explain()`, which turns Google's `HttpError` into one
+actionable sentence — including a direct enable-this-API link where relevant.
+

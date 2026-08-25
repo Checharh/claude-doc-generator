@@ -422,6 +422,20 @@ def tagline_candidates(readme, manifests):
     return out
 
 
+def logo_candidates(root, git, overrides):
+    """Logo sources for the {{LOGO}} placeholder, best first.
+
+    Delegated to images.py, which owns the format rules -- the Slides API takes
+    PNG, JPEG and GIF only, so an SVG logo is reported as blocked rather than
+    handed over to fail at insertion time.
+    """
+    try:
+        import images
+    except ImportError:
+        return []
+    return images.logo_candidates(root, git, overrides)
+
+
 def team_candidates(git, manifests):
     out = []
     if git['authors']:
@@ -508,6 +522,7 @@ def gather(repo_path):
             'TAGLINE': tagline_candidates(readme, manifests),
             'TEAM_NAMES': team_candidates(git, manifests),
             'DATE': [{'value': today.strftime('%d %B %Y'), 'source': 'system clock'}],
+            'LOGO': logo_candidates(root, git, overrides['values']),
         },
         'STATUS': status_evidence(root, manifests, git),
         'INDUSTRY': industry_evidence(manifests, readme),
